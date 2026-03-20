@@ -17,16 +17,14 @@ ALGORITHM         = "HS256"
 TOKEN_EXPIRY_DAYS = 30
 DB_PATH           = "users.db"
 
-# Gmail config
-GMAIL_SENDER   = "himanshus85549@gmail.com"
-GMAIL_PASSWORD = "flzbkcckyszgnvud"   # App password (spaces removed)
+# Gmail — Render.com Environment Variables se aata hai
+GMAIL_SENDER   = os.getenv("GMAIL_SENDER",   "himanshus85549@gmail.com")
+GMAIL_PASSWORD = os.getenv("GMAIL_PASSWORD", "flzbkcckyszgnvud")
 
 # ── Database setup ────────────────────────────────────────────────────────────
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
-
-    # Users table
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,8 +35,6 @@ def init_db():
             created  TEXT    DEFAULT CURRENT_TIMESTAMP
         )
     """)
-
-    # OTP table — stores pending OTPs
     conn.execute("""
         CREATE TABLE IF NOT EXISTS otps (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,7 +45,6 @@ def init_db():
             used       INTEGER DEFAULT 0
         )
     """)
-
     conn.commit()
     conn.close()
 
@@ -69,11 +64,11 @@ class LoginRequest(BaseModel):
 class OtpVerifyRequest(BaseModel):
     email:   str
     otp:     str
-    purpose: str   # "signup" or "login"
+    purpose: str
 
 class SendOtpRequest(BaseModel):
     email:   str
-    purpose: str   # "signup" or "login"
+    purpose: str
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -100,37 +95,42 @@ def verify_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token.")
 
 def generate_otp() -> str:
-    return str(random.randint(100000, 999999))   # 6 digit OTP
+    return str(random.randint(100000, 999999))
 
 # ── Email sender ──────────────────────────────────────────────────────────────
 
-def send_otp_email(to_email: str, otp: str, purpose: str):
+def send_otp_email(to_email: str, otp: str, purpose: str) -> bool:
     try:
-        subject = "Your Baby Parenting OTP" if purpose == "signup" else "Your Login OTP"
+        sender   = GMAIL_SENDER
+        password = GMAIL_PASSWORD
+
+        print(f"📧 Sending OTP to {to_email} via {sender}")
+
+        subject = "Your Baby Parenting OTP"
 
         html_body = f"""
-        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 30px;">
-            <div style="text-align: center; margin-bottom: 24px;">
-                <span style="font-size: 48px;">👶</span>
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 30px;">
+            <div style="text-align: center; margin-bottom: 20px;">
+                <span style="font-size: 42px;">👶</span>
                 <h2 style="color: #2D1B0E; margin: 8px 0;">Baby Parenting Companion</h2>
             </div>
-
             <div style="background: linear-gradient(135deg, #FF8B94, #FFB06A);
-                        border-radius: 16px; padding: 28px; text-align: center; margin-bottom: 24px;">
+                        border-radius: 16px; padding: 28px; text-align: center;">
                 <p style="color: white; font-size: 15px; margin: 0 0 16px 0;">
-                    {"Verify your email to create account" if purpose == "signup" else "Use this OTP to login"}
+                    {"Create your account" if purpose == "signup" else "Login to your account"}
                 </p>
-                <div style="background: white; border-radius: 12px; padding: 16px 32px; display: inline-block;">
-                    <span style="font-size: 36px; font-weight: bold; color: #FF8B94; letter-spacing: 8px;">
+                <div style="background: white; border-radius: 12px;
+                            padding: 16px 32px; display: inline-block; margin-bottom: 12px;">
+                    <span style="font-size: 38px; font-weight: bold;
+                                 color: #FF8B94; letter-spacing: 10px;">
                         {otp}
                     </span>
                 </div>
-                <p style="color: white; font-size: 13px; margin: 16px 0 0 0; opacity: 0.9;">
+                <p style="color: white; font-size: 12px; margin: 0; opacity: 0.9;">
                     This OTP expires in 10 minutes
                 </p>
             </div>
-
-            <p style="color: #AA8877; font-size: 12px; text-align: center;">
+            <p style="color: #AA8877; font-size: 11px; text-align: center; margin-top: 20px;">
                 If you didn't request this, please ignore this email.
             </p>
         </div>
@@ -138,20 +138,20 @@ def send_otp_email(to_email: str, otp: str, purpose: str):
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"]    = f"Baby Parenting App <{GMAIL_SENDER}>"
+        msg["From"]    = f"Baby Parenting App <{sender}>"
         msg["To"]      = to_email
         msg.attach(MIMEText(html_body, "html"))
 
-        # ✅ Port 587 + STARTTLS — Render.com pe 465 block hota hai
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(GMAIL_SENDER, GMAIL_PASSWORD)
-            server.sendmail(GMAIL_SENDER, to_email, msg.as_string())
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(sender, password)
+            server.sendmail(sender, to_email, msg.as_string())
 
+        print(f"✅ OTP sent successfully to {to_email}")
         return True
 
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"❌ Gmail auth failed: {e}")
+        return False
     except Exception as e:
         print(f"❌ Email send failed: {e}")
         return False
@@ -159,12 +159,9 @@ def send_otp_email(to_email: str, otp: str, purpose: str):
 # ── OTP endpoints ─────────────────────────────────────────────────────────────
 
 def send_otp(req: SendOtpRequest) -> dict:
-    """POST /send-otp — generate and email OTP"""
-
     email   = req.email.lower().strip()
     purpose = req.purpose
 
-    # Signup — check email not already registered
     if purpose == "signup":
         conn   = sqlite3.connect(DB_PATH)
         cursor = conn.execute("SELECT id FROM users WHERE email = ?", (email,))
@@ -173,7 +170,6 @@ def send_otp(req: SendOtpRequest) -> dict:
         if exists:
             raise HTTPException(status_code=409, detail="Email already registered. Please login.")
 
-    # Login — check email exists
     if purpose == "login":
         conn   = sqlite3.connect(DB_PATH)
         cursor = conn.execute("SELECT id FROM users WHERE email = ?", (email,))
@@ -182,15 +178,11 @@ def send_otp(req: SendOtpRequest) -> dict:
         if not exists:
             raise HTTPException(status_code=404, detail="Email not found. Please register first.")
 
-    # Generate OTP
     otp        = generate_otp()
     expires_at = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
 
-    # Delete old OTPs for this email + purpose
     conn = sqlite3.connect(DB_PATH)
     conn.execute("DELETE FROM otps WHERE email = ? AND purpose = ?", (email, purpose))
-
-    # Save new OTP
     conn.execute(
         "INSERT INTO otps (email, otp, purpose, expires_at) VALUES (?, ?, ?, ?)",
         (email, otp, purpose, expires_at)
@@ -198,20 +190,17 @@ def send_otp(req: SendOtpRequest) -> dict:
     conn.commit()
     conn.close()
 
-    # Send email
     sent = send_otp_email(email, otp, purpose)
     if not sent:
-        raise HTTPException(status_code=500, detail="Failed to send OTP email. Please try again.")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to send OTP email. Please check Gmail credentials in Render environment variables."
+        )
 
-    return {
-        "success": True,
-        "message": f"OTP sent to {email}. Check your inbox."
-    }
+    return {"success": True, "message": f"OTP sent to {email}. Check your inbox."}
 
 
 def verify_otp(req: OtpVerifyRequest) -> dict:
-    """POST /verify-otp — verify OTP, return action result"""
-
     email   = req.email.lower().strip()
     otp     = req.otp.strip()
     purpose = req.purpose
@@ -241,7 +230,6 @@ def verify_otp(req: OtpVerifyRequest) -> dict:
         conn.close()
         raise HTTPException(status_code=400, detail="Incorrect OTP. Please try again.")
 
-    # Mark OTP as used
     conn.execute("UPDATE otps SET used = 1 WHERE id = ?", (otp_id,))
     conn.commit()
     conn.close()
@@ -249,13 +237,9 @@ def verify_otp(req: OtpVerifyRequest) -> dict:
     return {"success": True, "verified": True, "email": email}
 
 
-# ── Register + Login ──────────────────────────────────────────────────────────
-
 def register_user(req: RegisterRequest) -> dict:
-    """POST /register — called AFTER OTP verified"""
     if len(req.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
-
     try:
         conn    = sqlite3.connect(DB_PATH)
         hashed  = hash_password(req.password)
@@ -266,7 +250,6 @@ def register_user(req: RegisterRequest) -> dict:
         user_id = cursor.lastrowid
         conn.commit()
         conn.close()
-
         token = create_token(user_id, req.email)
         return {
             "success": True,
@@ -275,7 +258,6 @@ def register_user(req: RegisterRequest) -> dict:
             "name":    req.name,
             "message": "Account created successfully!"
         }
-
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="Email already registered. Please login.")
     except Exception as e:
@@ -283,7 +265,6 @@ def register_user(req: RegisterRequest) -> dict:
 
 
 def login_user(req: LoginRequest) -> dict:
-    """POST /login — called AFTER OTP verified"""
     try:
         conn   = sqlite3.connect(DB_PATH)
         cursor = conn.execute(
@@ -292,15 +273,11 @@ def login_user(req: LoginRequest) -> dict:
         )
         user = cursor.fetchone()
         conn.close()
-
         if not user:
             raise HTTPException(status_code=401, detail="Email not found. Please register first.")
-
         user_id, email, hashed_pwd, name = user
-
         if not check_password(req.password, hashed_pwd):
             raise HTTPException(status_code=401, detail="Incorrect password. Please try again.")
-
         token = create_token(user_id, email)
         return {
             "success": True,
@@ -309,7 +286,6 @@ def login_user(req: LoginRequest) -> dict:
             "name":    name,
             "message": "Login successful!"
         }
-
     except HTTPException:
         raise
     except Exception as e:
@@ -317,7 +293,6 @@ def login_user(req: LoginRequest) -> dict:
 
 
 def get_me(authorization: str = Header(...)) -> dict:
-    """GET /me — verify token"""
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header.")
     token   = authorization.replace("Bearer ", "")
