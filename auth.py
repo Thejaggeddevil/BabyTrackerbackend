@@ -142,7 +142,11 @@ def send_otp_email(to_email: str, otp: str, purpose: str):
         msg["To"]      = to_email
         msg.attach(MIMEText(html_body, "html"))
 
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        # ✅ Port 587 + STARTTLS — Render.com pe 465 block hota hai
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
             server.login(GMAIL_SENDER, GMAIL_PASSWORD)
             server.sendmail(GMAIL_SENDER, to_email, msg.as_string())
 
