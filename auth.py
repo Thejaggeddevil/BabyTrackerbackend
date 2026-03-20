@@ -2,31 +2,54 @@ import os
 import jwt
 import bcrypt
 import sqlite3
+import random
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from fastapi import HTTPException, Header
 from pydantic import BaseModel
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-SECRET_KEY  = os.getenv("JWT_SECRET", "baby_parenting_secret_key_change_in_production")
-ALGORITHM   = "HS256"
+SECRET_KEY        = os.getenv("JWT_SECRET", "baby_parenting_secret_key_change_in_production")
+ALGORITHM         = "HS256"
 TOKEN_EXPIRY_DAYS = 30
-DB_PATH     = "users.db"
+DB_PATH           = "users.db"
+
+# Gmail config
+GMAIL_SENDER   = "himanshus85549@gmail.com"
+GMAIL_PASSWORD = "flzbkcckyszgnvud"   # App password (spaces removed)
 
 # ── Database setup ────────────────────────────────────────────────────────────
 
 def init_db():
-    """Create users table if not exists — runs once at startup."""
     conn = sqlite3.connect(DB_PATH)
+
+    # Users table
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id       INTEGER PRIMARY KEY AUTOINCREMENT,
             email    TEXT    UNIQUE NOT NULL,
             password TEXT    NOT NULL,
             name     TEXT    DEFAULT '',
+            verified INTEGER DEFAULT 0,
             created  TEXT    DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # OTP table — stores pending OTPs
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS otps (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            email      TEXT    NOT NULL,
+            otp        TEXT    NOT NULL,
+            purpose    TEXT    NOT NULL,
+            expires_at TEXT    NOT NULL,
+            used       INTEGER DEFAULT 0
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -42,6 +65,15 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email:    str
     password: str
+
+class OtpVerifyRequest(BaseModel):
+    email:   str
+    otp:     str
+    purpose: str   # "signup" or "login"
+
+class SendOtpRequest(BaseModel):
+    email:   str
+    purpose: str   # "signup" or "login"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -60,7 +92,6 @@ def create_token(user_id: int, email: str) -> str:
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 def verify_token(token: str) -> dict:
-    """Returns payload if valid, raises HTTPException if not."""
     try:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except jwt.ExpiredSignatureError:
@@ -68,18 +99,164 @@ def verify_token(token: str) -> dict:
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token.")
 
-# ── Auth endpoints — import these in main.py ─────────────────────────────────
+def generate_otp() -> str:
+    return str(random.randint(100000, 999999))   # 6 digit OTP
+
+# ── Email sender ──────────────────────────────────────────────────────────────
+
+def send_otp_email(to_email: str, otp: str, purpose: str):
+    try:
+        subject = "Your Baby Parenting OTP" if purpose == "signup" else "Your Login OTP"
+
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 30px;">
+            <div style="text-align: center; margin-bottom: 24px;">
+                <span style="font-size: 48px;">👶</span>
+                <h2 style="color: #2D1B0E; margin: 8px 0;">Baby Parenting Companion</h2>
+            </div>
+
+            <div style="background: linear-gradient(135deg, #FF8B94, #FFB06A);
+                        border-radius: 16px; padding: 28px; text-align: center; margin-bottom: 24px;">
+                <p style="color: white; font-size: 15px; margin: 0 0 16px 0;">
+                    {"Verify your email to create account" if purpose == "signup" else "Use this OTP to login"}
+                </p>
+                <div style="background: white; border-radius: 12px; padding: 16px 32px; display: inline-block;">
+                    <span style="font-size: 36px; font-weight: bold; color: #FF8B94; letter-spacing: 8px;">
+                        {otp}
+                    </span>
+                </div>
+                <p style="color: white; font-size: 13px; margin: 16px 0 0 0; opacity: 0.9;">
+                    This OTP expires in 10 minutes
+                </p>
+            </div>
+
+            <p style="color: #AA8877; font-size: 12px; text-align: center;">
+                If you didn't request this, please ignore this email.
+            </p>
+        </div>
+        """
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = f"Baby Parenting App <{GMAIL_SENDER}>"
+        msg["To"]      = to_email
+        msg.attach(MIMEText(html_body, "html"))
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(GMAIL_SENDER, GMAIL_PASSWORD)
+            server.sendmail(GMAIL_SENDER, to_email, msg.as_string())
+
+        return True
+
+    except Exception as e:
+        print(f"❌ Email send failed: {e}")
+        return False
+
+# ── OTP endpoints ─────────────────────────────────────────────────────────────
+
+def send_otp(req: SendOtpRequest) -> dict:
+    """POST /send-otp — generate and email OTP"""
+
+    email   = req.email.lower().strip()
+    purpose = req.purpose
+
+    # Signup — check email not already registered
+    if purpose == "signup":
+        conn   = sqlite3.connect(DB_PATH)
+        cursor = conn.execute("SELECT id FROM users WHERE email = ?", (email,))
+        exists = cursor.fetchone()
+        conn.close()
+        if exists:
+            raise HTTPException(status_code=409, detail="Email already registered. Please login.")
+
+    # Login — check email exists
+    if purpose == "login":
+        conn   = sqlite3.connect(DB_PATH)
+        cursor = conn.execute("SELECT id FROM users WHERE email = ?", (email,))
+        exists = cursor.fetchone()
+        conn.close()
+        if not exists:
+            raise HTTPException(status_code=404, detail="Email not found. Please register first.")
+
+    # Generate OTP
+    otp        = generate_otp()
+    expires_at = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
+
+    # Delete old OTPs for this email + purpose
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM otps WHERE email = ? AND purpose = ?", (email, purpose))
+
+    # Save new OTP
+    conn.execute(
+        "INSERT INTO otps (email, otp, purpose, expires_at) VALUES (?, ?, ?, ?)",
+        (email, otp, purpose, expires_at)
+    )
+    conn.commit()
+    conn.close()
+
+    # Send email
+    sent = send_otp_email(email, otp, purpose)
+    if not sent:
+        raise HTTPException(status_code=500, detail="Failed to send OTP email. Please try again.")
+
+    return {
+        "success": True,
+        "message": f"OTP sent to {email}. Check your inbox."
+    }
+
+
+def verify_otp(req: OtpVerifyRequest) -> dict:
+    """POST /verify-otp — verify OTP, return action result"""
+
+    email   = req.email.lower().strip()
+    otp     = req.otp.strip()
+    purpose = req.purpose
+
+    conn   = sqlite3.connect(DB_PATH)
+    cursor = conn.execute(
+        "SELECT id, otp, expires_at, used FROM otps WHERE email = ? AND purpose = ? ORDER BY id DESC LIMIT 1",
+        (email, purpose)
+    )
+    row = cursor.fetchone()
+
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=400, detail="No OTP found. Please request a new one.")
+
+    otp_id, saved_otp, expires_at, used = row
+
+    if used:
+        conn.close()
+        raise HTTPException(status_code=400, detail="OTP already used. Please request a new one.")
+
+    if datetime.utcnow() > datetime.fromisoformat(expires_at):
+        conn.close()
+        raise HTTPException(status_code=400, detail="OTP expired. Please request a new one.")
+
+    if otp != saved_otp:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Incorrect OTP. Please try again.")
+
+    # Mark OTP as used
+    conn.execute("UPDATE otps SET used = 1 WHERE id = ?", (otp_id,))
+    conn.commit()
+    conn.close()
+
+    return {"success": True, "verified": True, "email": email}
+
+
+# ── Register + Login ──────────────────────────────────────────────────────────
 
 def register_user(req: RegisterRequest) -> dict:
-    """POST /register"""
+    """POST /register — called AFTER OTP verified"""
     if len(req.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
 
     try:
-        conn = sqlite3.connect(DB_PATH)
-        hashed = hash_password(req.password)
-        cursor = conn.execute(
-            "INSERT INTO users (email, password, name) VALUES (?, ?, ?)",
+        conn    = sqlite3.connect(DB_PATH)
+        hashed  = hash_password(req.password)
+        cursor  = conn.execute(
+            "INSERT INTO users (email, password, name, verified) VALUES (?, ?, ?, 1)",
             (req.email.lower().strip(), hashed, req.name.strip())
         )
         user_id = cursor.lastrowid
@@ -102,7 +279,7 @@ def register_user(req: RegisterRequest) -> dict:
 
 
 def login_user(req: LoginRequest) -> dict:
-    """POST /login"""
+    """POST /login — called AFTER OTP verified"""
     try:
         conn   = sqlite3.connect(DB_PATH)
         cursor = conn.execute(
@@ -136,15 +313,9 @@ def login_user(req: LoginRequest) -> dict:
 
 
 def get_me(authorization: str = Header(...)) -> dict:
-    """GET /me — verify token and return user info"""
+    """GET /me — verify token"""
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header.")
-
     token   = authorization.replace("Bearer ", "")
     payload = verify_token(token)
-
-    return {
-        "success":  True,
-        "user_id":  payload["user_id"],
-        "email":    payload["email"]
-    }
+    return {"success": True, "user_id": payload["user_id"], "email": payload["email"]}
