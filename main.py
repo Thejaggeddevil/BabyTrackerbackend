@@ -3,6 +3,9 @@ from pydantic import BaseModel
 from predictor import predict
 from fastapi.middleware.cors import CORSMiddleware
 
+# ── NEW: Auth import ──────────────────────────────────────────────────────────
+from auth import RegisterRequest, LoginRequest, register_user, login_user, get_me
+
 app = FastAPI(
     title="Parenting AI API",
     description="API for baby development and parenting guidance",
@@ -21,6 +24,8 @@ class RequestData(BaseModel):
     model: str
     text: str
 
+
+# ── Existing endpoints (same as before) ───────────────────────────────────────
 
 @app.get("/")
 def home():
@@ -42,8 +47,7 @@ def run_prediction(data: RequestData):
         return result
 
     # ── Build steps from available fields ────────────────────────────────────
-    # No dataset has a raw "steps" column, so we construct meaningful steps
-    # from the fields that DO exist across all 15 models.
+
     steps = []
 
     goal  = result.get("parent_learning_goal") or result.get("goal") or ""
@@ -52,9 +56,9 @@ def run_prediction(data: RequestData):
     why   = result.get("why_it_matters") or ""
     sol   = result.get("solution_steps") or ""
 
-    # subject datasets (maths, science, social, civics, cs, foreign, safety)
+
     if sol:
-        # solution_steps is a stringified list — clean and split it
+
         import ast
         try:
             parsed = ast.literal_eval(sol)
@@ -63,7 +67,7 @@ def run_prediction(data: RequestData):
         except Exception:
             steps = [s.strip() for s in sol.split(".") if s.strip()]
     else:
-        # parent / child activity datasets — build 3 meaningful steps
+
         if goal:
             steps.append(f"Step 1 — Understand the goal: {goal}")
         if how:
@@ -73,9 +77,9 @@ def run_prediction(data: RequestData):
         elif why:
             steps.append(f"Step 3 — Why this matters: {why}")
 
-    # ── Field mapping: works across ALL 15 models ─────────────────────────────
+
     return {
-        # Core fields
+
         "domain": (
             result.get("domain") or
             result.get("subject") or
@@ -98,28 +102,27 @@ def run_prediction(data: RequestData):
         ),
         "why": (
             result.get("why_it_matters") or
-            result.get("response_guidance") or    # good_bad_touch
-            result.get("learning_goal") or        # language_5_12
+            result.get("response_guidance") or
+            result.get("learning_goal") or
             ""
         ),
         "how": (
             result.get("how_to_teach") or
-            result.get("activity_idea") or        # baby_0_24 / child_24_60
+            result.get("activity_idea") or
             result.get("activity") or
-            result.get("trusted_action") or       # good_bad_touch
+            result.get("trusted_action") or
             ""
         ),
-        "dos": _parse_list(result.get("parent_dos") or ""),
+        "dos":   _parse_list(result.get("parent_dos") or ""),
         "donts": _parse_list(result.get("parent_donts") or ""),
         "tip": (
             result.get("parent_tip") or
-            result.get("feedback_example") or     # language_5_12
-            result.get("emotional_tone") or       # good_bad_touch
+            result.get("feedback_example") or
+            result.get("emotional_tone") or
             ""
         ),
         "steps": steps,
 
-        # Extra fields — Android can use these for rich detail cards
         "difficulty": result.get("difficulty_level") or "",
         "materials":  result.get("materials_needed") or "",
         "duration":   result.get("duration_minutes") or "",
@@ -141,5 +144,22 @@ def _parse_list(raw: str) -> list:
             return [str(x).strip() for x in parsed if str(x).strip()]
     except Exception:
         pass
-    # fallback: comma-split
+    
     return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+# ── NEW: Auth endpoints ───────────────────────────────────────────────────────
+
+@app.post("/register")
+def register(req: RegisterRequest):
+    return register_user(req)
+
+
+@app.post("/login")
+def login(req: LoginRequest):
+    return login_user(req)
+
+
+@app.get("/me")
+def me(authorization: str = None):
+    return get_me(authorization)
