@@ -16,7 +16,7 @@ TOKEN_EXPIRY_DAYS = 30
 DB_PATH           = "users.db"
 
 # Resend API — works on Render free tier (HTTP, not SMTP)
-RESEND_API_KEY = os.getenv("RESEND_API_KEY", "re_WeE8EdBS_CPr3k9U24n1CuGzm1oYUn1wX")
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 
 # ── Database setup ────────────────────────────────────────────────────────────
 
