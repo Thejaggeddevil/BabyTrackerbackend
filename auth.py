@@ -3,9 +3,7 @@ import jwt
 import bcrypt
 import sqlite3
 import random
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import requests
 from datetime import datetime, timedelta
 from fastapi import HTTPException, Header
 from pydantic import BaseModel
@@ -17,8 +15,8 @@ ALGORITHM         = "HS256"
 TOKEN_EXPIRY_DAYS = 30
 DB_PATH           = "users.db"
 
-GMAIL_SENDER   = os.getenv("GMAIL_SENDER",   "himanshus85549@gmail.com")
-GMAIL_PASSWORD = os.getenv("GMAIL_PASSWORD", "owisveshmomnccao")
+# Resend API — works on Render free tier (HTTP, not SMTP)
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "re_WeE8EdBS_CPr3k9U24n1CuGzm1oYUn1wX")
 
 # ── Database setup ────────────────────────────────────────────────────────────
 
@@ -96,14 +94,11 @@ def verify_token(token: str) -> dict:
 def generate_otp() -> str:
     return str(random.randint(100000, 999999))
 
-# ── Email sender ──────────────────────────────────────────────────────────────
+# ── Email sender via Resend API ───────────────────────────────────────────────
 
 def send_otp_email(to_email: str, otp: str, purpose: str) -> bool:
     try:
-        sender   = GMAIL_SENDER
-        password = GMAIL_PASSWORD
-
-        print(f"📧 Sending OTP to {to_email} via {sender}")
+        print(f"📧 Sending OTP to {to_email} via Resend API")
 
         html_body = f"""
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 30px;">
@@ -128,34 +123,32 @@ def send_otp_email(to_email: str, otp: str, purpose: str) -> bool:
                 </p>
             </div>
             <p style="color: #AA8877; font-size: 11px; text-align: center; margin-top: 20px;">
-                If you didn't request this, please ignore this email.
+                If you did not request this, please ignore this email.
             </p>
         </div>
         """
 
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = "Your Baby Parenting OTP"
-        msg["From"]    = f"Baby Parenting App <{sender}>"
-        msg["To"]      = to_email
-        msg.attach(MIMEText(html_body, "html"))
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type":  "application/json"
+            },
+            json={
+                "from":    "Baby Parenting App <onboarding@resend.dev>",
+                "to":      [to_email],
+                "subject": "Your Baby Parenting OTP",
+                "html":    html_body
+            }
+        )
 
-        # ✅ PORT 587 (TLS) — Render.com free tier pe kaam karta hai
-        # Port 465 (SSL) Render free tier pe BLOCKED hai
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(sender, password)
-            server.sendmail(sender, to_email, msg.as_string())
+        if response.status_code == 200 or response.status_code == 201:
+            print(f"✅ OTP sent successfully to {to_email}")
+            return True
+        else:
+            print(f"❌ Resend API error: {response.status_code} — {response.text}")
+            return False
 
-        print(f"✅ OTP sent successfully to {to_email}")
-        return True
-
-    except smtplib.SMTPAuthenticationError as e:
-        print(f"❌ Gmail auth failed: {e}")
-        return False
-    except OSError as e:
-        print(f"❌ Network error: {e}")
-        return False
     except Exception as e:
         print(f"❌ Email send failed: {e}")
         return False

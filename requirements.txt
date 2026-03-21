@@ -6,3 +6,4 @@ numpy
 python-multipart
 PyJWT
 bcrypt
+requests
