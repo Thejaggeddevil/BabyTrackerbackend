@@ -17,9 +17,8 @@ ALGORITHM         = "HS256"
 TOKEN_EXPIRY_DAYS = 30
 DB_PATH           = "users.db"
 
-# Gmail credentials
 GMAIL_SENDER   = os.getenv("GMAIL_SENDER",   "himanshus85549@gmail.com")
-GMAIL_PASSWORD = os.getenv("GMAIL_PASSWORD", "owisveshmomnccao")  # ✅ new app password
+GMAIL_PASSWORD = os.getenv("GMAIL_PASSWORD", "owisveshmomnccao")
 
 # ── Database setup ────────────────────────────────────────────────────────────
 
@@ -140,7 +139,11 @@ def send_otp_email(to_email: str, otp: str, purpose: str) -> bool:
         msg["To"]      = to_email
         msg.attach(MIMEText(html_body, "html"))
 
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        # ✅ PORT 587 (TLS) — Render.com free tier pe kaam karta hai
+        # Port 465 (SSL) Render free tier pe BLOCKED hai
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.ehlo()
+            server.starttls()
             server.login(sender, password)
             server.sendmail(sender, to_email, msg.as_string())
 
@@ -149,6 +152,9 @@ def send_otp_email(to_email: str, otp: str, purpose: str) -> bool:
 
     except smtplib.SMTPAuthenticationError as e:
         print(f"❌ Gmail auth failed: {e}")
+        return False
+    except OSError as e:
+        print(f"❌ Network error: {e}")
         return False
     except Exception as e:
         print(f"❌ Email send failed: {e}")
@@ -192,7 +198,7 @@ def send_otp(req: SendOtpRequest) -> dict:
     if not sent:
         raise HTTPException(
             status_code=500,
-            detail="Failed to send OTP email. Please check Gmail credentials."
+            detail="Failed to send OTP email. Please try again."
         )
 
     return {"success": True, "message": f"OTP sent to {email}. Check your inbox."}
