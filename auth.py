@@ -17,9 +17,9 @@ ALGORITHM         = "HS256"
 TOKEN_EXPIRY_DAYS = 30
 DB_PATH           = "users.db"
 
-# Gmail — Render.com Environment Variables se aata hai
+# Gmail credentials
 GMAIL_SENDER   = os.getenv("GMAIL_SENDER",   "himanshus85549@gmail.com")
-GMAIL_PASSWORD = os.getenv("GMAIL_PASSWORD", "flzbkcckyszgnvud")
+GMAIL_PASSWORD = os.getenv("GMAIL_PASSWORD", "owisveshmomnccao")  # ✅ new app password
 
 # ── Database setup ────────────────────────────────────────────────────────────
 
@@ -106,8 +106,6 @@ def send_otp_email(to_email: str, otp: str, purpose: str) -> bool:
 
         print(f"📧 Sending OTP to {to_email} via {sender}")
 
-        subject = "Your Baby Parenting OTP"
-
         html_body = f"""
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 30px;">
             <div style="text-align: center; margin-bottom: 20px;">
@@ -137,7 +135,7 @@ def send_otp_email(to_email: str, otp: str, purpose: str) -> bool:
         """
 
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
+        msg["Subject"] = "Your Baby Parenting OTP"
         msg["From"]    = f"Baby Parenting App <{sender}>"
         msg["To"]      = to_email
         msg.attach(MIMEText(html_body, "html"))
@@ -194,7 +192,7 @@ def send_otp(req: SendOtpRequest) -> dict:
     if not sent:
         raise HTTPException(
             status_code=500,
-            detail="Failed to send OTP email. Please check Gmail credentials in Render environment variables."
+            detail="Failed to send OTP email. Please check Gmail credentials."
         )
 
     return {"success": True, "message": f"OTP sent to {email}. Check your inbox."}
