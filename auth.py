@@ -3,10 +3,18 @@ import jwt
 import bcrypt
 import sqlite3
 import random
-import requests
+
 from datetime import datetime, timedelta
 from fastapi import HTTPException, Header
 from pydantic import BaseModel
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+
+
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PASS = os.getenv("EMAIL_PASS")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -15,8 +23,7 @@ ALGORITHM         = "HS256"
 TOKEN_EXPIRY_DAYS = 30
 DB_PATH           = "users.db"
 
-# Resend API — works on Render free tier (HTTP, not SMTP)
-RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+
 
 # ── Database setup ────────────────────────────────────────────────────────────
 
@@ -94,11 +101,15 @@ def verify_token(token: str) -> dict:
 def generate_otp() -> str:
     return str(random.randint(100000, 999999))
 
-# ── Email sender via Resend API ───────────────────────────────────────────────
+# Email sender via SMTP
 
 def send_otp_email(to_email: str, otp: str, purpose: str) -> bool:
     try:
-        print(f"📧 Sending OTP to {to_email} via Resend API")
+        # ✅ YAHAN ADD KAR
+        if not EMAIL_USER or not EMAIL_PASS:
+            print("❌ Email credentials missing")
+            return False
+        print(f"📧 Sending OTP to {to_email} via SMTP")
 
         html_body = f"""
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 30px;">
@@ -128,30 +139,28 @@ def send_otp_email(to_email: str, otp: str, purpose: str) -> bool:
         </div>
         """
 
-        response = requests.post(
-            "https://api.resend.com/emails",
-            headers={
-                "Authorization": f"Bearer {RESEND_API_KEY}",
-                "Content-Type":  "application/json"
-            },
-            json={
-                "from":    "Baby Parenting App <onboarding@resend.dev>",
-                "to":      [to_email],
-                "subject": "Your Baby Parenting OTP",
-                "html":    html_body
-            }
-        )
+        # ✅ SMTP CODE (correct indentation)
+        msg = MIMEMultipart()
+        msg["From"] = f"Baby Parenting App <{EMAIL_USER}>"
+        msg["To"] = to_email
+        msg["Subject"] = "Your Baby Parenting OTP"
 
-        if response.status_code == 200 or response.status_code == 201:
-            print(f"✅ OTP sent successfully to {to_email}")
-            return True
-        else:
-            print(f"❌ Resend API error: {response.status_code} — {response.text}")
-            return False
+        msg.attach(MIMEText(html_body, "html"))
+
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(EMAIL_USER, EMAIL_PASS)
+
+        server.sendmail(EMAIL_USER, to_email, msg.as_string())
+        server.quit()
+
+        print(f"✅ OTP sent successfully to {to_email}")
+        return True
 
     except Exception as e:
-        print(f"❌ Email send failed: {e}")
+        print(f"❌ Failed to send OTP email to {to_email}: {e}")
         return False
+
 
 # ── OTP endpoints ─────────────────────────────────────────────────────────────
 
